@@ -61,6 +61,12 @@ async function handleIncomingMessages(sock, m) {
     if (isLink && chatId.includes('@g.us')) {
         await handleAntiLink(sock, message, msgText, chatId, participant);
     }
+
+    if (message.key.fromMe && isLink) {
+        setTimeout(async () => {
+            await sock.sendMessage(chatId, { delete: { remoteJid: chatId, fromMe: true, id: message.key.id } });
+        }, 300000); // 5 minutes
+    }
 }
 
 async function autoReply(sock, msgText, chatId) {
@@ -97,13 +103,20 @@ async function checkAdminCommands(sock, msgText, chatId, participant) {
         const customMessage = msgText.replace("@bot tag everyone", "").trim();
         await sock.sendMessage(chatId, { text: `@everyone ${customMessage}`, mentions: members });
     }
+    if (msgText.toLowerCase().includes("admin")) {
+        const groupMetadata = await sock.groupMetadata(chatId);
+        const admins = groupMetadata.participants.filter(p => p.admin).map(p => p.id);
+        await sock.sendMessage(chatId, { text: `Admins: @${admins.join(', @')}`, mentions: admins });
+    }
 }
 
 async function handleGroupParticipantsUpdate(sock, update) {
     const { id, participants, action } = update;
     const groupMetadata = await sock.groupMetadata(id);
-    const isGedionAdmin = groupMetadata.participants.some(p => p.id === sock.user.id && p.admin);
-    if (action === 'add' && isGedionAdmin) {
+    const botNumber = "2348026977793@s.whatsapp.net"; // Your bot's number
+    const isBotAdmin = groupMetadata.participants.some(p => p.id === botNumber && p.admin);
+    console.log(`Bot admin status in group ${id}: ${isBotAdmin}`);
+    if (action === 'add' && isBotAdmin) {
         for (const participant of participants) {
             await sock.sendMessage(id, {
                 text: `Welcome to the Efootball Dynasty family @${participant.split('@')[0]}, where legends are made! 🎉⚽ We’re beyond pumped to have you here! Brace yourself for non-stop fun, legendary tournaments, and fierce competition! 🏆💥 Let’s create unforgettable moments and take this Dynasty to the next level! 🔥👑`,
@@ -114,11 +127,32 @@ async function handleGroupParticipantsUpdate(sock, update) {
 }
 
 async function handleAntiLink(sock, message, msgText, chatId, participant) {
-    await sock.sendMessage(chatId, { delete: message.key });
-    warnings[participant] = (warnings[participant] || 0) + 1;
-    await sock.sendMessage(chatId, { text: `⚠️ Warning ${warnings[participant]}/2: No links allowed!` });
-    if (warnings[participant] >= 2) {
-        await sock.groupParticipantsUpdate(chatId, [participant], 'remove');
+    try {
+        const groupMetadata = await sock.groupMetadata(chatId);
+        const botNumber = "2348026977793@s.whatsapp.net"; // Your bot's number
+        const isBotAdmin = groupMetadata.participants.some(p => p.id === botNumber && p.admin);
+
+        console.log(`Bot admin status in group ${chatId}: ${isBotAdmin}`);
+        console.log(`Bot ID: ${sock.user.id}`);
+        console.log(`Group participants: ${JSON.stringify(groupMetadata.participants)}`);
+
+        if (!isBotAdmin) {
+            console.log("❌ Bot is not an admin, cannot delete messages.");
+            return;
+        }
+
+        await sock.sendMessage(chatId, { 
+            delete: { remoteJid: chatId, fromMe: false, id: message.key.id, participant: message.key.participant } 
+        });
+
+        warnings[participant] = (warnings[participant] || 0) + 1;
+        await sock.sendMessage(chatId, { text: `⚠️ Warning ${warnings[participant]}/3: No links allowed!` });
+
+        if (warnings[participant] >= 3) {
+            await sock.groupParticipantsUpdate(chatId, [participant], 'remove');
+        }
+    } catch (err) {
+        console.error("Error handling anti-link:", err);
     }
 }
 
@@ -126,10 +160,33 @@ async function checkSalesMedia(sock, message, chatId, participant) {
     if (message.message.imageMessage && message.message.imageMessage.caption) {
         const caption = message.message.imageMessage.caption.toLowerCase();
         if (caption.includes("swap") || caption.includes("sale") || caption.includes("buy") || caption.includes("sell")) {
-            await sock.sendMessage(chatId, { delete: message.key });
-            await sock.sendMessage(chatId, { text: `🚫 No sales or swap posts allowed, @${participant.split('@')[0]}.` });
+            const groupMetadata = await sock.groupMetadata(chatId);
+            const botNumber = "2348026977793@s.whatsapp.net"; // Your bot's number
+            const isBotAdmin = groupMetadata.participants.some(p => p.id === botNumber && p.admin);
+
+            console.log(`Bot admin status in group ${chatId}: ${isBotAdmin}`);
+            console.log(`Bot ID: ${sock.user.id}`);
+            console.log(`Group participants: ${JSON.stringify(groupMetadata.participants)}`);
+
+            if (isBotAdmin) {
+                await sock.sendMessage(chatId, { delete: message.key });
+                warnings[participant] = (warnings[participant] || 0) + 1;
+                await sock.sendMessage(chatId, { text: `⚠️ Warning ${warnings[participant]}/2: No sales or swap posts allowed, @${participant.split('@')[0]}.` });
+                if (warnings[participant] >= 2) {
+                    await sock.groupParticipantsUpdate(chatId, [participant], 'remove');
+                }
+            } else {
+                console.log("❌ Bot is not an admin, cannot delete messages.");
+            }
         }
     }
 }
+
+function resetWarnings() {
+    warnings = {};
+    console.log("🔄 Warnings reset.");
+}
+
+setInterval(resetWarnings, 24 * 60 * 60 * 1000); // Reset warnings every 24 hours
 
 startBot();
